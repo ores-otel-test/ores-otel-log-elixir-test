@@ -1,0 +1,15 @@
+{
+  "language": "elixir",
+  "matrixVersion": "ores.otel.test-repository/v1",
+  "name": "ores-otel-log-elixir-test",
+  "requireExactHeadChecks": true,
+  "requireNoMonkeyPatching": true,
+  "runtime": "Elixir on OTP",
+  "sources": [
+    "ores-otel/ores.otel.log",
+    "ORESoftware/next-loggers.ts"
+  ],
+  "status": "seeded",
+  "testCommand": "mix format --check-formatted && mix test --warnings-as-errors",
+  "toolchain": "mix"
+}
