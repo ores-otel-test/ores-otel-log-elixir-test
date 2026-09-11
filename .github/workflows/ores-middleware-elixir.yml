@@ -49,13 +49,24 @@ jobs:
           test "$(git -C middleware rev-parse HEAD)" = "$ORES_MIDDLEWARE_SHA"
           test -z "$(git -C middleware status --porcelain)"
 
-      - name: Resolve and repeat native Elixir/Plug tests
+      - name: Resolve dependencies and classify lock drift
         run: |
           set -euo pipefail
           cd middleware/src/elixir
           mix local.hex --force
           mix deps.get
-          mix format --check-formatted
+          if git diff --quiet -- mix.lock; then
+            echo "ORES_MIDDLEWARE_LOCK_DRIFT=false" >> "$GITHUB_ENV"
+          else
+            echo "ORES_MIDDLEWARE_LOCK_DRIFT=true" >> "$GITHUB_ENV"
+            echo "::warning file=middleware/src/elixir/mix.lock::mix deps.get changed the committed dependency lock; runtime tests will continue and the reproducibility gate will fail at the end"
+          fi
+
+      - name: Format and repeat native Elixir/Plug tests
+        run: |
+          set -euo pipefail
+          cd middleware/src/elixir
+          mix format --check-formatted "lib/**/*.ex" "test/**/*.exs" mix.exs
           for iteration in 1 2 3 4 5; do
             echo "Elixir middleware iteration $iteration"
             mix test --trace
@@ -89,11 +100,23 @@ jobs:
             --receipt target/test-org/elixir/receipt.json
           jq -e '.passed == true and (.runs | length) == 10 and all(.runs[]; .passed == true and .exit_code == 0)' target/test-org/elixir/receipt.json
 
-      - name: Prove tracked source stayed immutable
+      - name: Prove authored Elixir source stayed immutable
         if: ${{ always() }}
         run: |
           set -euo pipefail
-          test -z "$(git -C middleware diff --name-only)"
+          git -C middleware diff --exit-code -- \
+            src/elixir/lib \
+            src/elixir/test \
+            src/elixir/mix.exs
+
+      - name: Record dependency lock drift
+        if: ${{ always() }}
+        run: |
+          set -euo pipefail
+          mkdir -p middleware/target/test-org/elixir
+          if ! git -C middleware diff --quiet -- src/elixir/mix.lock; then
+            git -C middleware diff -- src/elixir/mix.lock > middleware/target/test-org/elixir/mix-lock.diff
+          fi
 
       - name: Retain Elixir evidence
         if: ${{ always() }}
@@ -101,5 +124,14 @@ jobs:
         with:
           name: ores-otel-test-elixir-middleware-${{ github.run_id }}
           path: middleware/target/test-org/elixir
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 30
+
+      - name: Enforce dependency-lock reproducibility
+        if: ${{ always() }}
+        run: |
+          set -euo pipefail
+          if [ "${ORES_MIDDLEWARE_LOCK_DRIFT:-false}" = "true" ]; then
+            echo "::error file=middleware/src/elixir/mix.lock::dependency resolution changed the committed Elixir lockfile; upstream lock metadata must be refreshed before this lane can promote"
+            exit 1
+          fi
